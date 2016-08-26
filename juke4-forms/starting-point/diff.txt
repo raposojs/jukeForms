@@ -1,0 +1,559 @@
+diff --git a/browser/index.html b/browser/index.html
+index 1593288..675bfbc 100644
+--- a/browser/index.html
++++ b/browser/index.html
+@@ -7,8 +7,9 @@
+     <link href="/style.css" rel="stylesheet" />
+     <script src="/angular/angular.js" defer></script>
+     <script src="/js/module.js" defer></script>
+-    <script src="/js/albums.js" defer></script>
+-    <script src="/js/player.js" defer></script>
++    <script src="/js/album/album.controllers.js" defer></script>
++    <script src="/js/player/player.controller.js" defer></script>
++    <script src="/js/player/player.factory.js" defer></script>
+   </head>
+   <body ng-app="juke">
+     <div id="main" class="container-fluid">
+diff --git a/browser/js/album/album.controllers.js b/browser/js/album/album.controllers.js
+new file mode 100644
+index 0000000..8d7ca85
+--- /dev/null
++++ b/browser/js/album/album.controllers.js
+@@ -0,0 +1,61 @@
++/* global juke */
++'use strict';
++
++juke.controller('AlbumCtrl', function ($scope, $http, $rootScope, $log) {
++
++  // load our initial data
++  $http.get('/api/albums/')
++  .then(function (res) { return res.data; })
++  .then(function (albums) {
++    return $http.get('/api/albums/' + albums[0].id); // temp: get one
++  })
++  .then(function (res) { return res.data; })
++  .then(function (album) {
++    album.imageUrl = '/api/albums/' + album.id + '/image';
++    album.songs.forEach(function (song, i) {
++      song.audioUrl = '/api/songs/' + song.id + '/audio';
++      song.albumIndex = i;
++    });
++    $scope.album = album;
++  })
++  .catch($log.error); // $log service can be turned on and off; also, pre-bound
++
++  // main toggle
++  $scope.toggle = function (song) {
++    if ($scope.playing && song === $scope.currentSong) {
++      $rootScope.$broadcast('pause');
++    } else {
++      $rootScope.$broadcast('play', song);
++    }
++  };
++
++  // incoming events (from Player, toggle, or skip)
++  $scope.$on('pause', pause);
++  $scope.$on('play', play);
++  $scope.$on('next', next);
++  $scope.$on('prev', prev);
++
++  // functionality
++  function pause () {
++    $scope.playing = false;
++  }
++  function play (event, song) {
++    $scope.playing = true;
++    $scope.currentSong = song;
++  }
++
++  // a "true" modulo that wraps negative to the top of the range
++  function mod (num, m) { return ((num % m) + m) % m; }
++
++  // jump `interval` spots in album (negative to go back, default +1)
++  function skip (interval) {
++    if (!$scope.currentSong) return;
++    var index = $scope.currentSong.albumIndex;
++    index = mod( (index + (interval || 1)), $scope.album.songs.length );
++    $scope.currentSong = $scope.album.songs[index];
++    if ($scope.playing) $rootScope.$broadcast('play', $scope.currentSong);
++  }
++  function next () { skip(1); }
++  function prev () { skip(-1); }
++
++});
+diff --git a/browser/js/albums.js b/browser/js/albums.js
+deleted file mode 100644
+index 8d7ca85..0000000
+--- a/browser/js/albums.js
++++ /dev/null
+@@ -1,61 +0,0 @@
+-/* global juke */
+-'use strict';
+-
+-juke.controller('AlbumCtrl', function ($scope, $http, $rootScope, $log) {
+-
+-  // load our initial data
+-  $http.get('/api/albums/')
+-  .then(function (res) { return res.data; })
+-  .then(function (albums) {
+-    return $http.get('/api/albums/' + albums[0].id); // temp: get one
+-  })
+-  .then(function (res) { return res.data; })
+-  .then(function (album) {
+-    album.imageUrl = '/api/albums/' + album.id + '/image';
+-    album.songs.forEach(function (song, i) {
+-      song.audioUrl = '/api/songs/' + song.id + '/audio';
+-      song.albumIndex = i;
+-    });
+-    $scope.album = album;
+-  })
+-  .catch($log.error); // $log service can be turned on and off; also, pre-bound
+-
+-  // main toggle
+-  $scope.toggle = function (song) {
+-    if ($scope.playing && song === $scope.currentSong) {
+-      $rootScope.$broadcast('pause');
+-    } else {
+-      $rootScope.$broadcast('play', song);
+-    }
+-  };
+-
+-  // incoming events (from Player, toggle, or skip)
+-  $scope.$on('pause', pause);
+-  $scope.$on('play', play);
+-  $scope.$on('next', next);
+-  $scope.$on('prev', prev);
+-
+-  // functionality
+-  function pause () {
+-    $scope.playing = false;
+-  }
+-  function play (event, song) {
+-    $scope.playing = true;
+-    $scope.currentSong = song;
+-  }
+-
+-  // a "true" modulo that wraps negative to the top of the range
+-  function mod (num, m) { return ((num % m) + m) % m; }
+-
+-  // jump `interval` spots in album (negative to go back, default +1)
+-  function skip (interval) {
+-    if (!$scope.currentSong) return;
+-    var index = $scope.currentSong.albumIndex;
+-    index = mod( (index + (interval || 1)), $scope.album.songs.length );
+-    $scope.currentSong = $scope.album.songs[index];
+-    if ($scope.playing) $rootScope.$broadcast('play', $scope.currentSong);
+-  }
+-  function next () { skip(1); }
+-  function prev () { skip(-1); }
+-
+-});
+diff --git a/browser/js/player.js b/browser/js/player.js
+deleted file mode 100644
+index 4c51f04..0000000
+--- a/browser/js/player.js
++++ /dev/null
+@@ -1,63 +0,0 @@
+-/* global juke */
+-'use strict';
+-
+-juke.controller('PlayerCtrl', function ($scope, $rootScope) {
+-
+-  // initialize audio player (note this kind of DOM stuff is odd for Angular)
+-  var audio = document.createElement('audio');
+-  audio.addEventListener('ended', function () {
+-    $scope.next();
+-    // $scope.$apply(); // triggers $rootScope.$digest, which hits other scopes
+-    $scope.$evalAsync(); // likely best, schedules digest if none happening
+-  });
+-  audio.addEventListener('timeupdate', function () {
+-    $scope.progress = 100 * audio.currentTime / audio.duration;
+-    // $scope.$digest(); // re-computes current template only (this scope)
+-    $scope.$evalAsync(); // likely best, schedules digest if none happening
+-  });
+-
+-  // state
+-  $scope.currentSong;
+-  $scope.playing = false;
+-
+-  // main toggle
+-  $scope.toggle = function (song) {
+-    if ($scope.playing) $rootScope.$broadcast('pause');
+-    else $rootScope.$broadcast('play', song);
+-  };
+-
+-  // incoming events (from Album or toggle)
+-  $scope.$on('pause', pause);
+-  $scope.$on('play', play);
+-
+-  // functionality
+-  function pause () {
+-    audio.pause();
+-    $scope.playing = false;
+-  }
+-  function play (event, song){
+-    // stop existing audio (e.g. other song) in any case
+-    pause();
+-    $scope.playing = true;
+-    // resume current song
+-    if (song === $scope.currentSong) return audio.play();
+-    // enable loading new song
+-    $scope.currentSong = song;
+-    audio.src = song.audioUrl;
+-    audio.load();
+-    audio.play();
+-  }
+-
+-  // outgoing events (to Album… or potentially other characters)
+-  $scope.next = function () { pause(); $rootScope.$broadcast('next'); };
+-  $scope.prev = function () { pause(); $rootScope.$broadcast('prev'); };
+-
+-  function seek (decimal) {
+-    audio.currentTime = audio.duration * decimal;
+-  }
+-
+-  $scope.handleProgressClick = function (evt) {
+-    seek(evt.offsetX / evt.currentTarget.scrollWidth);
+-  };
+-
+-});
+diff --git a/browser/js/player/player.controller.js b/browser/js/player/player.controller.js
+new file mode 100644
+index 0000000..4c51f04
+--- /dev/null
++++ b/browser/js/player/player.controller.js
+@@ -0,0 +1,63 @@
++/* global juke */
++'use strict';
++
++juke.controller('PlayerCtrl', function ($scope, $rootScope) {
++
++  // initialize audio player (note this kind of DOM stuff is odd for Angular)
++  var audio = document.createElement('audio');
++  audio.addEventListener('ended', function () {
++    $scope.next();
++    // $scope.$apply(); // triggers $rootScope.$digest, which hits other scopes
++    $scope.$evalAsync(); // likely best, schedules digest if none happening
++  });
++  audio.addEventListener('timeupdate', function () {
++    $scope.progress = 100 * audio.currentTime / audio.duration;
++    // $scope.$digest(); // re-computes current template only (this scope)
++    $scope.$evalAsync(); // likely best, schedules digest if none happening
++  });
++
++  // state
++  $scope.currentSong;
++  $scope.playing = false;
++
++  // main toggle
++  $scope.toggle = function (song) {
++    if ($scope.playing) $rootScope.$broadcast('pause');
++    else $rootScope.$broadcast('play', song);
++  };
++
++  // incoming events (from Album or toggle)
++  $scope.$on('pause', pause);
++  $scope.$on('play', play);
++
++  // functionality
++  function pause () {
++    audio.pause();
++    $scope.playing = false;
++  }
++  function play (event, song){
++    // stop existing audio (e.g. other song) in any case
++    pause();
++    $scope.playing = true;
++    // resume current song
++    if (song === $scope.currentSong) return audio.play();
++    // enable loading new song
++    $scope.currentSong = song;
++    audio.src = song.audioUrl;
++    audio.load();
++    audio.play();
++  }
++
++  // outgoing events (to Album… or potentially other characters)
++  $scope.next = function () { pause(); $rootScope.$broadcast('next'); };
++  $scope.prev = function () { pause(); $rootScope.$broadcast('prev'); };
++
++  function seek (decimal) {
++    audio.currentTime = audio.duration * decimal;
++  }
++
++  $scope.handleProgressClick = function (evt) {
++    seek(evt.offsetX / evt.currentTarget.scrollWidth);
++  };
++
++});
+diff --git a/browser/js/player/player.factory.js b/browser/js/player/player.factory.js
+new file mode 100644
+index 0000000..23dcc5e
+--- /dev/null
++++ b/browser/js/player/player.factory.js
+@@ -0,0 +1,5 @@
++'use strict';
++
++juke.factory('PlayerFactory', function(){
++  // non-UI logic in here
++});
+diff --git a/browser/js/player/player.factory.spec.js b/browser/js/player/player.factory.spec.js
+new file mode 100644
+index 0000000..d8c7b09
+--- /dev/null
++++ b/browser/js/player/player.factory.spec.js
+@@ -0,0 +1,207 @@
++var expect = chai.expect;
++
++describe('`PlayerFactory` factory', function () {
++  beforeEach(module('juke')); // loads our app
++
++  var SONG1_DURATION_SECS = 105;
++
++  var song1, song2;
++  before(function () {
++    song1 = { audioUrl: 'https://learndotresources.s3.amazonaws.com/workshop/561bcd7fe305540300446092/sample1.mp3' };
++    song2 = { audioUrl: 'https://learndotresources.s3.amazonaws.com/workshop/561bcd7fe305540300446092/sample2.mp3' };
++  });
++
++  var audioMock, PlayerFactory;
++  beforeEach(function () {
++    // mock audio
++    var createElement = document.createElement;
++    document.createElement = function () {
++      var elem = createElement.apply(document, arguments);
++      if (arguments[0] === 'audio') {
++        elem.volume = 0;
++        audioMock = elem;
++      }
++      return elem;
++    };
++  });
++
++  afterEach(function () {
++    if (audioMock) audioMock.pause();
++  });
++
++  beforeEach(inject(function ($injector) {
++    PlayerFactory = $injector.get('PlayerFactory');
++  }));
++
++  /*------------------
++      TEST SPECS
++  /------------------*/
++
++  describe('#start', function () {
++
++    it('plays given song', function () {
++      chai.spy.on(HTMLAudioElement.prototype, 'load');
++      chai.spy.on(HTMLAudioElement.prototype, 'play');
++      PlayerFactory.start(song1);
++      expect(HTMLAudioElement.prototype.load).to.have.been.called();
++      expect(HTMLAudioElement.prototype.play).to.have.been.called();
++    });
++
++    it('stops previous song when playing new song', function () {
++      chai.spy.on(PlayerFactory, 'pause');
++      chai.spy.on(HTMLAudioElement.prototype, 'play');
++      PlayerFactory.start(song1);
++      PlayerFactory.start(song2);
++      expect(PlayerFactory.pause).to.have.been.called();
++      expect(HTMLAudioElement.prototype.play).to.have.been.called();
++    });
++
++  });
++
++  xdescribe('#pause', function () {
++
++    it("calls audio's `pause`", function () {
++      chai.spy.on(HTMLAudioElement.prototype, 'pause');
++      PlayerFactory.pause();
++      expect(HTMLAudioElement.prototype.pause).to.have.been.called();
++    });
++
++  });
++
++  xdescribe('#resume', function () {
++
++    it("calls audio's `play`", function () {
++      chai.spy.on(HTMLAudioElement.prototype, 'play');
++      PlayerFactory.resume();
++      expect(HTMLAudioElement.prototype.play).to.have.been.called();
++    });
++
++  });
++
++  xdescribe('#isPlaying', function () {
++
++    it('returns false when song is not playing', function () {
++      expect(PlayerFactory.isPlaying()).to.equal(false);
++    });
++
++    it('returns true when song is playing', function () {
++      PlayerFactory.start(song1);
++      expect(PlayerFactory.isPlaying()).to.equal(true);
++    });
++
++    it('toggles with pause/resume', function () {
++      PlayerFactory.start(song1);
++      expect(PlayerFactory.isPlaying()).to.equal(true);
++      PlayerFactory.pause();
++      expect(PlayerFactory.isPlaying()).to.equal(false);
++      PlayerFactory.resume();
++      expect(PlayerFactory.isPlaying()).to.equal(true);
++    });
++
++  });
++
++  xdescribe('#getCurrentSong', function () {
++
++    it('defaults to null', function () {
++      expect(PlayerFactory.getCurrentSong()).to.equal(null);
++    });
++
++    it('returns the song that is playing', function () {
++      PlayerFactory.start(song1);
++      expect(PlayerFactory.getCurrentSong()).to.equal(song1);
++    });
++
++    it('returns the current song even when paused', function () {
++      PlayerFactory.start(song1);
++      PlayerFactory.pause();
++      expect(PlayerFactory.getCurrentSong()).to.equal(song1);
++    });
++
++  });
++
++  xdescribe('#next', function () {
++
++    var songList;
++
++    before(function () {
++      songList = [song1, song2];
++    });
++
++    it('starts the next song in the list', function () {
++      chai.spy.on(PlayerFactory, 'start');
++      // start must now accept a second argument, the current song list
++      PlayerFactory.start(song1, songList);
++      PlayerFactory.next();
++      expect(PlayerFactory.start).to.have.been.called.with(song2);
++    });
++
++    it('cycles when it reaches the end', function () {
++      chai.spy.on(PlayerFactory, 'start');
++      PlayerFactory.start(song2, songList);
++      PlayerFactory.next();
++      expect(PlayerFactory.start).to.have.been.called.with(song1);
++    });
++
++  });
++
++  xdescribe('#previous', function () {
++
++    var songList;
++
++    before(function () {
++      songList = [song1, song2];
++    });
++
++    it('starts the previous song in the list', function () {
++      chai.spy.on(PlayerFactory, 'start');
++      // start must now accept a second argument, the current song list
++      PlayerFactory.start(song2, songList);
++      PlayerFactory.previous();
++      expect(PlayerFactory.start).to.have.been.called.with(song1);
++    });
++
++    it('cycles when it reaches the beginning', function () {
++      chai.spy.on(PlayerFactory, 'start');
++      PlayerFactory.start(song1, songList);
++      PlayerFactory.previous();
++      expect(PlayerFactory.start).to.have.been.called.with(song2);
++    });
++
++  });
++
++
++  xdescribe('#getProgress', function () {
++
++    it('is 0 before playing song', function () {
++      expect(PlayerFactory.getProgress()).to.equal(0);
++    });
++
++    it('is a decimal between 0 and 1 corresponding to audio play progress', function (done) {
++      this.timeout(5000);
++      audioMock.addEventListener('playing', function () {
++        setTimeout(function () {
++          expect(PlayerFactory.getProgress()).to.be.closeTo(1/SONG1_DURATION_SECS, 0.01);
++          done();
++        }, 1000);
++      });
++      PlayerFactory.start(song1);
++    });
++
++    it('stays stable when paused', function (done) {
++      this.timeout(1000);
++      audioMock.addEventListener('playing', function () {
++        setTimeout(PlayerFactory.pause, 100);
++      });
++      audioMock.addEventListener('pause', function () {
++        var progressAtPause = PlayerFactory.getProgress();
++        setTimeout(function () {
++          expect(PlayerFactory.getProgress()).to.equal(progressAtPause);
++          done();
++        }, 50);
++      });
++      PlayerFactory.start(song1);
++    });
++
++  });
++
++});
+diff --git a/package.json b/package.json
+index 14f45c8..bf3a623 100644
+--- a/package.json
++++ b/package.json
+@@ -5,10 +5,11 @@
+   "main": "server/start.js",
+   "scripts": {
+     "start": "nodemon --watch server -e js,html server/start.js",
++    "test": "./node_modules/.bin/mocha server/**/*.test.js --reporter spec",
++    "test:player": "node_modules/.bin/testem",
+     "seed": "node ./bin/seed",
+     "db-init": "./db-init.sh",
+-    "postinstall": "npm run db-init",
+-    "test": "./node_modules/.bin/mocha server/**/*.test.js --reporter spec"
++    "postinstall": "npm run db-init"
+   },
+   "dependencies": {
+     "angular": "1.5.0",
+@@ -34,7 +35,10 @@
+     "volleyball": "^1.3.0"
+   },
+   "devDependencies": {
+-    "chai": "^3.5.0",
+-    "mocha": "^2.5.1"
++    "angular-mocks": "1.5.0",
++    "chai": "3.5.0",
++    "chai-spies": "0.7.1",
++    "mocha": "^2.5.1",
++    "testem": "1.2.2"
+   }
+ }
+diff --git a/testem.json b/testem.json
+new file mode 100644
+index 0000000..ba3cde7
+--- /dev/null
++++ b/testem.json
+@@ -0,0 +1,10 @@
++{
++  "framework": "mocha+chai",
++  "src_files": [
++    "node_modules/angular/angular.js",
++    "node_modules/angular-mocks/angular-mocks.js",
++    "node_modules/chai-spies/chai-spies.js",
++    "browser/js/module.js",
++    "browser/js/player/**/*.js"
++  ]
++}
