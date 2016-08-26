@@ -49,12 +49,12 @@ juke.controller('singlePlaylistCtrl', function ($scope, PlaylistFactory, PlayerF
 
 	SongFactory.fetchAll()
 		.then((songs)=> {
-			$scope.songs = songs;
+			$scope.songs = songs.map(SongFactory.convert);
 		});
 
 	$scope.addSong = (song, playlistId)=> {
 		PlaylistFactory.addSong(song, playlistId).then((song)=> {
-			$scope.playlist.songs.push(song);
+			$scope.playlist.songs.push(SongFactory.convert(song));
 			$scope.selected = null;
 			$scope.songSelection.$setPristine();
 		})
